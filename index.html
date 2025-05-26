@@ -1,1 +1,145 @@
 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Fake VR Scene Viewer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: black;
+    }
+    #startButton, #calibrateButton {
+      position: absolute;
+      padding: 14px 20px;
+      font-size: 16px;
+      background: rgba(30, 30, 30, 0.85);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      z-index: 10;
+      cursor: pointer;
+    }
+    #startButton {
+      top: 40%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+    }
+    #calibrateButton {
+      bottom: 20px;
+      right: 20px;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <button id="startButton">Enter Scene</button>
+  <button id="calibrateButton">Set View</button>
+
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.min.js"></script>
+  <script>
+    let scene, camera, renderer;
+    let environment = new THREE.Group();
+    let targetQuaternion = new THREE.Quaternion();
+    let northOffsetQuat = new THREE.Quaternion();
+    let currentDeviceQuat = new THREE.Quaternion();
+
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x000000);
+
+    camera = new THREE.PerspectiveCamera(90, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 0, 0);
+
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    scene.add(environment);
+
+    // Load flat image and stretch as fake 180-degree dome
+    fetch('random-image.php')
+      .then(res => res.text())
+      .then(imagePath => {
+        const loader = new THREE.TextureLoader();
+        loader.load(imagePath, texture => {
+          texture.wrapS = THREE.ClampToEdgeWrapping;
+          texture.wrapT = THREE.ClampToEdgeWrapping;
+
+          // Half sphere geometry: thetaLength = 180° (Math.PI), phiLength = 180° (Math.PI)
+          const geometry = new THREE.SphereGeometry(50, 64, 64, 0, Math.PI, 0, Math.PI);
+          const material = new THREE.MeshBasicMaterial({
+            map: texture,
+            side: THREE.BackSide
+          });
+
+          const halfSphere = new THREE.Mesh(geometry, material);
+          environment.add(halfSphere);
+        });
+      });
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.2));
+
+    function onDeviceOrientation(event) {
+      const alpha = THREE.MathUtils.degToRad(event.alpha || 0);
+      const beta = THREE.MathUtils.degToRad(event.beta || 0);
+      const gamma = THREE.MathUtils.degToRad(event.gamma || 0);
+      const orient = (window.orientation || 0) * Math.PI / 180;
+
+      const euler = new THREE.Euler(beta, alpha, -gamma, 'YXZ');
+      const quat = new THREE.Quaternion().setFromEuler(euler);
+
+      const xFix = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
+      const screenFix = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -orient);
+
+      currentDeviceQuat.copy(quat).multiply(xFix).multiply(screenFix);
+      targetQuaternion.copy(currentDeviceQuat).premultiply(northOffsetQuat);
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      camera.quaternion.slerp(targetQuaternion, 0.2);
+      renderer.render(scene, camera);
+    }
+
+    function enableMotion() {
+      const startBtn = document.getElementById('startButton');
+      const calibrateBtn = document.getElementById('calibrateButton');
+
+      if (typeof DeviceOrientationEvent?.requestPermission === 'function') {
+        DeviceOrientationEvent.requestPermission().then(response => {
+          if (response === 'granted') {
+            window.addEventListener('deviceorientation', onDeviceOrientation, true);
+            startBtn.style.display = 'none';
+            calibrateBtn.style.display = 'block';
+          } else {
+            alert("Permission denied.");
+          }
+        }).catch(console.error);
+      } else {
+        window.addEventListener('deviceorientation', onDeviceOrientation, true);
+        startBtn.style.display = 'none';
+        calibrateBtn.style.display = 'block';
+      }
+    }
+
+    function calibrateNorth() {
+      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(currentDeviceQuat);
+      const yaw = Math.atan2(forward.x, forward.z);
+      northOffsetQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -yaw);
+    }
+
+    document.getElementById('startButton').addEventListener('click', enableMotion);
+    document.getElementById('calibrateButton').addEventListener('click', calibrateNorth);
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    animate();
+  </script>
+</body>
+</html>
